@@ -1,0 +1,402 @@
+## Code written by Carolynne Hultquist and Rose Foster-Dyer
+#Extracting sea ice concentration values from 8 Regions of Interest (ROIs) in the Ross Sea
+
+####SIC####
+
+library(sf)
+library(raster)
+library(terra) #https://rspatial.github.io/terra/reference/zonal.html
+library(parallel)
+
+#data from NOAA
+#https://masie_web.apps.nsidc.org/pub/DATASETS/NOAA/G02135/south/monthly/geotiff/
+
+#ROI - 200km buffer from penguin colonies projected to NOAA sea ice layer and land clipped out
+#new data is RossSea_EMPE_merged.shp
+
+setwd("~/Desktop/EMPE files/Ice data/Carolynne R Help")
+EMPE_st <- st_read("RossSea_EMPE_merged.shp")
+EMPE_vect <- vect(EMPE_st) #prep for terra
+#region <- st_read("RossSea_region_Trimmed.shp/RossSea_region_Trimmed.shp")
+
+#### Try on individual layer first - example
+#individual layer - NOAA sea ice concentration, example monthly concentration Dec 2021
+setwd("//file/Usersr$/rtf22/Home/Desktop/EMPE files/Ice data/SIC_monthly/all")
+ice1 <- raster("S_202112_concentration_v3.0.tif")
+ice1 <- rast(ice1) #prep for terra
+
+# Visualize entire layer a location of Ross region
+plot(ice1)
+plot(EMPE_st$geometry, add=T) 
+
+#zoom to area of choice
+zoom=drawExtent() # draw by clicking top left, bottom right
+zoom_values <- c(-1499223, 1016800, -2962000,-1070493)
+plot(ice1, ext=zoom_values)
+plot(EMPE_st$geometry,add=T)
+
+# Extract mean for all months and areas automatically (redone below to extract the raw values to then calculate mean and sd in one go)
+dirname <- "//file/Usersr$/rtf22/Home/Desktop/EMPE files/Ice data/SIC_monthly/all" #where all the geotiff files are stored
+geotiffNames <- list.files(dirname, pattern = "concentration",recursive = TRUE, full.names = TRUE) #select only concentration files
+#extracts just the files with "concentration" in the file name 
+#can also do the for extent by just changing the key word
+
+#Setup place to store data in the size needed
+ret <- matrix(nrow = nrow(EMPE_vect), ncol = length(geotiffNames))
+#saves a lot of computer power to tell exactly how big the table is going to be
+#do it beforehand, so it goes faster
+#and based on variables it can change
+
+#Create function to extract mean values for ROI
+i=1
+getSeaIceCalc <-function(id, geotiffNames){ #what goes into the function, a file into the function
+  seaIce <- rast(geotiffNames[id]) #what is the name of the file we want
+  #Calculate and store mean value for each area
+  ret <- extract(seaIce, EMPE_vect, fun=mean)#change to extract, zonal did not work!
+  return(ret)
+}
+
+# The actual processing - apply functioning using parallel package across multiple cores 
+#(always use at least one less core than on your computer)
+
+SeaIceCalc <- mclapply(1:length(geotiffNames),getSeaIceCalc,geotiffNames,mc.cores = 1) #28) 
+#change it based on the processing power of your computer, use more than one to speed it up
+# Error says mc.cores >1 not supported by windows
+
+#setup data to store
+ret[1:length(SeaIceCalc)] = unlist(EMPE_vect)
+
+#find the months/years of files to add as column headers
+re <- regexpr("[0-9]+",basename(geotiffNames))
+dateid <- as.numeric(substring(regmatches(basename(geotiffNames),re),0,6))
+
+#store data with year/month column names for CSV and SHP
+df <- data.frame(SeaIceCalc)
+
+colnames(df) <-dateid
+
+EMPE1 <- cbind(EMPE_vect, df)
+EMPE2 <- st_as_sf(EMPE1)
+
+#Export average sea ice of each ROI for each month
+path <- "//file/Usersr$/rtf22/Home/Desktop/EMPE files/Ice data"
+write.csv(EMPE1, file.path(path,"EMPEMeanSIC.csv"))
+st_write(EMPE2, dsn = "EMPEMeanSeaIce.shp", layer = "EMPEMeanSeaIce.shp",
+         driver = "ESRI Shapefile", append = TRUE)
+
+###SIC SD####
+
+#so we need to extract the areas then calculate the SD from there for each of the 8 regions
+outputTerra2 <- extract(ice1, EMPE_vect)
+sd(outputTerra2$S_202112_concentration_v3.0)
+mean(outputTerra2$S_202112_concentration_v3.0)
+max(outputTerra2$S_202112_concentration_v3.0)
+min(outputTerra2$S_202112_concentration_v3.0)
+
+# Extract SD for all months and areas
+dirname <- "//file/Usersr$/rtf22/Home/Desktop/EMPE files/Ice data/SIC_monthly/all" #where all the geotiff files are stored
+geotiffNames <- list.files(dirname, pattern = "concentration",recursive = TRUE, full.names = TRUE) #select only concentration files
+#extracts just the files with "concentration" in the file name 
+#can also do the for extent by just changing the key word
+
+#Setup place to store data in the size needed
+ret <- matrix(nrow = nrow(EMPE_vect), ncol = length(geotiffNames))
+#saves a lot of computer power to tell exactly how big the table is going to be
+#do it beforehand, so it goes faster
+#and based on variables it can change
+
+#Create function to extract SD values for ROI
+i=1
+getSeaIceCalc <-function(id, geotiffNames){ #what goes into the function, a file into the function
+  seaIce <- rast(geotiffNames[id]) #what is the name of the file we want
+  #Calculate and store mean value for each area
+  ret <- extract(seaIce, EMPE_vect) #extracting all values based on ROI, not just means as was done previously
+  return(ret)
+}
+
+# The actual processing 
+SeaIceCalc <- mclapply(1:length(geotiffNames),getSeaIceCalc,geotiffNames,mc.cores = 1) #28) 
+
+#setup data to store
+ret[1:length(SeaIceCalc)] = unlist(EMPE_vect)
+#Error in ret[, 1:length(SeaIceCalc)] = unlist(SeaIceCalc) : 
+
+#find the months/years of files to add as column headers
+re <- regexpr("[0-9]+",basename(geotiffNames))
+dateid <- as.numeric(substring(regmatches(basename(geotiffNames),re),0,6))
+
+#store data with year/month column names for CSV and SHP
+df <- data.frame(SeaIceCalc)
+names(df)
+
+#so now subset each ID out of the df and find sd for each separate area ROI
+
+Beaufort_SIC <- subset(df, ID == 1, select = S_200001_concentration_v3.0:S_202112_concentration_v3.0)
+Colbeck_SIC <- subset(df, ID == 2, select = S_200001_concentration_v3.0:S_202112_concentration_v3.0)
+Coulman_SIC <- subset(df, ID == 3, select = S_200001_concentration_v3.0:S_202112_concentration_v3.0)
+Crozier_SIC <- subset(df, ID == 4, select = S_200001_concentration_v3.0:S_202112_concentration_v3.0)
+Franklin_SIC <- subset(df, ID == 5, select = S_200001_concentration_v3.0:S_202112_concentration_v3.0)
+Roget_SIC <- subset(df, ID == 6, select = S_200001_concentration_v3.0:S_202112_concentration_v3.0)
+Washington_SIC <- subset(df, ID == 7, select = S_200001_concentration_v3.0:S_202112_concentration_v3.0)
+Ross_SIC <- subset(df, ID == 8, select = S_200001_concentration_v3.0:S_202112_concentration_v3.0)
+
+#now we have all values of SIC for each location for each year, now we take  the SD of each variable within each df
+
+#df is all values for each of the eight ROIs
+#separated into ROI, each has different lengths as they cover different areas so cannot be analysed together
+
+#we want to add in the data, year and month to those individual dfs, 
+#then take the seasonal averages for each, using the matching seasonal values
+
+#need to change column names to rows then assign seasonal character
+#use reshape tool 
+
+library(reshape)
+names(Beaufort_SIC)
+BEAU <- melt(Beaufort_SIC) #change from wide to long format
+
+#need to extract the date out of the variable name
+#find the months/years of files to add as column headers
+
+library(stringr)
+dateid <- str_sub(BEAU$variable, 3, 8)
+
+BEAU$date <- dateid
+BEAU$date2 <-  as.Date(paste0(as.character(BEAU$date), '01'), format='%Y%m%d')
+
+#ok now we need to extract the month from that 
+BEAU$month<- format(as.Date(BEAU$date2, format="%Y-%m-%d"),"%m")
+BEAU$month<- as.numeric(BEAU$month)
+
+BEAU$year <- format(as.Date(BEAU$date2, format="%Y-%m-%d"),"%y")
+BEAU$year<- as.numeric(BEAU$year)
+
+#now we populate the season column based on the month column 
+library(dplyr)
+BEAU$season = case_when(BEAU$month == 1 | BEAU$month == 2 | BEAU$month == 3 ~ "JFM", 
+                        BEAU$month == 4 | BEAU$month == 5 | BEAU$month == 6 ~ "AMJ", 
+                        BEAU$month == 7 | BEAU$month == 8 | BEAU$month == 9 ~ "JAS", 
+                        BEAU$month == 10 | BEAU$month == 11 | BEAU$month == 12 ~ "OND")
+
+#and now we take the average based on the season and the year
+avg <- BEAU %>%
+  group_by(year, season) %>%
+  summarise_at(., vars("value"), list(mean = mean, sd = sd))
+
+head(avg)
+#now repeat it for each colony, rename mean and sd with colony names and then combine them into one df
+
+BEAU_SIC <- rename(avg, Beaufort_mean = mean, 
+               Beaufort_sd = sd)
+#Colbeck
+library(reshape)
+names(Colbeck_SIC)
+COLB <- melt(Colbeck_SIC) #change from wide to long format
+COUL <- melt(Coulman_SIC)
+CROZ <- melt(Crozier_SIC)
+FRAN <- melt(Franklin_SIC)
+ROGE <- melt(Roget_SIC)
+WASH <- melt(Washington_SIC)
+ROSS <- melt(Ross_SIC)
+
+#Colbeck 
+library(stringr)
+dateid <- str_sub(COLB$variable, 3, 8)
+COLB$date <- dateid
+COLB$date2 <-  as.Date(paste0(as.character(COLB$date), '01'), format='%Y%m%d')
+
+COLB$month<- format(as.Date(COLB$date2, format="%Y-%m-%d"),"%m")
+COLB$month<- as.numeric(COLB$month)
+
+COLB$year <- format(as.Date(COLB$date2, format="%Y-%m-%d"),"%y")
+COLB$year<- as.numeric(COLB$year)
+
+library(dplyr)
+COLB$season = case_when(COLB$month == 1 | COLB$month == 2 | COLB$month == 3 ~ "JFM", 
+                        COLB$month == 4 | COLB$month == 5 | COLB$month == 6 ~ "AMJ", 
+                        COLB$month == 7 | COLB$month == 8 | COLB$month == 9 ~ "JAS", 
+                        COLB$month == 10 | COLB$month == 11 | COLB$month == 12 ~ "OND")
+avg <- COLB %>%
+  group_by(year, season) %>%
+  summarise_at(., vars("value"), list(mean = mean, sd = sd))
+
+COLB_SIC <- rename(avg, Colbeck_mean = mean, 
+                   Colbeck_sd = sd)
+#Coulman
+library(stringr)
+dateid <- str_sub(COUL$variable, 3, 8)
+
+COUL$date <- dateid
+COUL$date2 <-  as.Date(paste0(as.character(COUL$date), '01'), format='%Y%m%d')
+
+#ok now we need to extract the month from that 
+COUL$month<- format(as.Date(COUL$date2, format="%Y-%m-%d"),"%m")
+COUL$month<- as.numeric(COUL$month)
+
+COUL$year <- format(as.Date(COUL$date2, format="%Y-%m-%d"),"%y")
+COUL$year<- as.numeric(COUL$year)
+
+#ok amazing! And now we populate the season column based on the month column 
+library(dplyr)
+COUL$season = case_when(COUL$month == 1 | COUL$month == 2 | COUL$month == 3 ~ "JFM", 
+                        COUL$month == 4 | COUL$month == 5 | COUL$month == 6 ~ "AMJ", 
+                        COUL$month == 7 | COUL$month == 8 | COUL$month == 9 ~ "JAS", 
+                        COUL$month == 10 | COUL$month == 11 | COUL$month == 12 ~ "OND")
+
+#and now we take the average based on the season and the year
+avg <- COUL %>%
+  group_by(year, season) %>%
+  summarise_at(., vars("value"), list(mean = mean, sd = sd))
+
+COUL_SIC <- rename(avg, Coulman_mean = mean, 
+                   Coulman_sd = sd)
+#Crozier
+library(stringr)
+dateid <- str_sub(CROZ$variable, 3, 8)
+
+CROZ$date <- dateid
+CROZ$date2 <-  as.Date(paste0(as.character(CROZ$date), '01'), format='%Y%m%d')
+
+#ok now we need to extract the month from that 
+CROZ$month<- format(as.Date(CROZ$date2, format="%Y-%m-%d"),"%m")
+CROZ$month<- as.numeric(CROZ$month)
+
+CROZ$year <- format(as.Date(CROZ$date2, format="%Y-%m-%d"),"%y")
+CROZ$year<- as.numeric(CROZ$year)
+
+library(dplyr)
+CROZ$season = case_when(CROZ$month == 1 | CROZ$month == 2 | CROZ$month == 3 ~ "JFM", 
+                        CROZ$month == 4 | CROZ$month == 5 | CROZ$month == 6 ~ "AMJ", 
+                        CROZ$month == 7 | CROZ$month == 8 | CROZ$month == 9 ~ "JAS", 
+                        CROZ$month == 10 | CROZ$month == 11 | CROZ$month == 12 ~ "OND")
+
+avg <- CROZ %>%
+  group_by(year, season) %>%
+  summarise_at(., vars("value"), list(mean = mean, sd = sd))
+
+CROZ_SIC <- rename(avg, Crozier_mean = mean, 
+                   Crozier_sd = sd)
+
+#Franklin
+dateid <- str_sub(FRAN$variable, 3, 8)
+
+FRAN$date <- dateid
+FRAN$date2 <-  as.Date(paste0(as.character(FRAN$date), '01'), format='%Y%m%d')
+
+#ok now we need to extract the month from that 
+FRAN$month<- format(as.Date(FRAN$date2, format="%Y-%m-%d"),"%m")
+FRAN$month<- as.numeric(FRAN$month)
+
+FRAN$year <- format(as.Date(FRAN$date2, format="%Y-%m-%d"),"%y")
+FRAN$year<- as.numeric(FRAN$year)
+
+#ok amazing! And now we populate the season column based on the month column 
+library(dplyr)
+FRAN$season = case_when(FRAN$month == 1 | FRAN$month == 2 | FRAN$month == 3 ~ "JFM", 
+                        FRAN$month == 4 | FRAN$month == 5 | FRAN$month == 6 ~ "AMJ", 
+                        FRAN$month == 7 | FRAN$month == 8 | FRAN$month == 9 ~ "JAS", 
+                        FRAN$month == 10 | FRAN$month == 11 | FRAN$month == 12 ~ "OND")
+
+#and now we take the average based on the season and the year
+avg <- FRAN %>%
+  group_by(year, season) %>%
+  summarise_at(., vars("value"), list(mean = mean, sd = sd))
+
+FRAN_SIC <- rename(avg, Franklin_mean = mean, 
+                   Franklin_sd = sd)
+
+#Roget
+dateid <- str_sub(ROGE$variable, 3, 8)
+
+ROGE$date <- dateid
+ROGE$date2 <-  as.Date(paste0(as.character(ROGE$date), '01'), format='%Y%m%d')
+
+#ok now we need to extract the month from that 
+ROGE$month<- format(as.Date(ROGE$date2, format="%Y-%m-%d"),"%m")
+ROGE$month<- as.numeric(ROGE$month)
+
+ROGE$year <- format(as.Date(ROGE$date2, format="%Y-%m-%d"),"%y")
+ROGE$year<- as.numeric(ROGE$year)
+
+
+library(dplyr)
+ROGE$season = case_when(ROGE$month == 1 | ROGE$month == 2 | ROGE$month == 3 ~ "JFM", 
+                        ROGE$month == 4 | ROGE$month == 5 | ROGE$month == 6 ~ "AMJ", 
+                        ROGE$month == 7 | ROGE$month == 8 | ROGE$month == 9 ~ "JAS", 
+                        ROGE$month == 10 | ROGE$month == 11 | ROGE$month == 12 ~ "OND")
+
+#and now we take the average based on the season and the year
+avg <- ROGE %>%
+  group_by(year, season) %>%
+  summarise_at(., vars("value"), list(mean = mean, sd = sd))
+
+ROGE_SIC <- rename(avg, Roget_mean = mean, 
+                   Roget_sd = sd)
+
+#Washington
+dateid <- str_sub(WASH$variable, 3, 8)
+
+WASH$date <- dateid
+WASH$date2 <-  as.Date(paste0(as.character(WASH$date), '01'), format='%Y%m%d')
+
+#ok now we need to extract the month from that 
+WASH$month<- format(as.Date(WASH$date2, format="%Y-%m-%d"),"%m")
+WASH$month<- as.numeric(WASH$month)
+
+WASH$year <- format(as.Date(WASH$date2, format="%Y-%m-%d"),"%y")
+WASH$year<- as.numeric(WASH$year)
+
+#ok amazing! And now we populate the season column based on the month column 
+library(dplyr)
+WASH$season = case_when(WASH$month == 1 | WASH$month == 2 | WASH$month == 3 ~ "JFM", 
+                        WASH$month == 4 | WASH$month == 5 | WASH$month == 6 ~ "AMJ", 
+                        WASH$month == 7 | WASH$month == 8 | WASH$month == 9 ~ "JAS", 
+                        WASH$month == 10 | WASH$month == 11 | WASH$month == 12 ~ "OND")
+
+avg <- WASH %>%
+  group_by(year, season) %>%
+  summarise_at(., vars("value"), list(mean = mean, sd = sd))
+
+head(avg)
+WASH_SIC <- rename(avg, Washington_mean = mean, 
+                   Washington_sd = sd)
+#Ross
+dateid <- str_sub(ROSS$variable, 3, 8)
+
+ROSS$date <- dateid
+ROSS$date2 <-  as.Date(paste0(as.character(ROSS$date), '01'), format='%Y%m%d')
+
+ROSS$month<- format(as.Date(ROSS$date2, format="%Y-%m-%d"),"%m")
+ROSS$month<- as.numeric(ROSS$month)
+
+ROSS$year <- format(as.Date(ROSS$date2, format="%Y-%m-%d"),"%y")
+ROSS$year<- as.numeric(ROSS$year)
+
+#populate the season column based on the month column 
+library(dplyr)
+ROSS$season = case_when(ROSS$month == 1 | ROSS$month == 2 | ROSS$month == 3 ~ "JFM", 
+                        ROSS$month == 4 | ROSS$month == 5 | ROSS$month == 6 ~ "AMJ", 
+                        ROSS$month == 7 | ROSS$month == 8 | ROSS$month == 9 ~ "JAS", 
+                        ROSS$month == 10 | ROSS$month == 11 | ROSS$month == 12 ~ "OND")
+
+#and now we take the average based on the season and the year
+avg <- ROSS %>%
+  group_by(year, season) %>%
+  summarise_at(., vars("value"), list(mean = mean, sd = sd))
+
+head(avg)
+ROSS_SIC <- rename(avg, Ross_mean = mean, 
+                   Ross_sd = sd)
+
+#now we have the mean SIC and SD for each of the 8 ROIs, in separate dfs,
+#we now want to merge them together based on the matching year and season
+
+library(tidyverse)
+all_df <- list(ROSS_SIC,  BEAU_SIC, COLB_SIC,COUL_SIC, CROZ_SIC, FRAN_SIC, ROGE_SIC, WASH_SIC) 
+SIC_all <- all_df %>% reduce(inner_join, by = c("year", "season"))
+
+#now we have all seasonal SIC means and sds for each of the 8 ROIs
+
+path <- "~/Desktop/EMPE files/Ice data"
+write.csv(SIC_all, file.path(path,"SeaIceConcentration_seasonal.csv"))
+
